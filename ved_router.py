@@ -27,16 +27,19 @@ def ask_gpt35(prompt):
     return response.choices[0].message.content
 
 def ask_gigachat(prompt):
-    headers = {
-        "Authorization": f"Bearer {GIGACHAT_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "GigaChat",
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    response = requests.post("https://gigachat.api.sbercloud.ru/v1/chat/completions", headers=headers, json=data)
-    return response.json()["choices"][0]["message"]["content"]
+    try:
+        headers = {
+            "Authorization": f"Bearer {GIGACHAT_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "GigaChat",
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        response = requests.post("https://gigachat.api.sbercloud.ru/v1/chat/completions", headers=headers, json=data, timeout=10)
+        return response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return "Извините, временно нет доступа к таможенной информации. Попробуйте позже."
 
 def route_message(message: str) -> str:
     try:
