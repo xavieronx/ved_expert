@@ -1,53 +1,45 @@
-import os
-import requests
-from gigachat_token_loader import get_gigachat_token
+from get_gigachat_token_final import get_gigachat_token
 from openai import OpenAI
+import os
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Получаем актуальный GigaChat токен
 GIGACHAT_TOKEN = get_gigachat_token()
 
-GPT4_KEYWORDS = ["регистрация", "налог", "субсидия", "отчётность", "декларация"]
-GIGACHAT_KEYWORDS = ["контракт", "договор", "сертификат", "инвойс", "таможня"]
+# Настройка GigaChat клиента (если используешь через OpenAI совместимый интерфейс)
+client = OpenAI(
+    api_key=GIGACHAT_TOKEN,
+    base_url="https://gigachat.devices.sberbank.ru/api/v1",
+    default_headers={
+        "Authorization": f"Bearer {GIGACHAT_TOKEN}",
+        "Content-Type": "application/json",
+    }
+)
 
-def contains_keywords(text, keywords):
-    return any(word in text.lower() for word in keywords)
+# Основная функция маршрутизации сообщений
+def route_message(text):
+    if "таможня" in text.lower():
+        return gigachat_answer(text)
+    else:
+        return gpt_answer(text)
 
-def ask_gpt4(prompt):
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
-
-def ask_gpt35(prompt):
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
-
-def ask_gigachat(prompt):
+def gigachat_answer(prompt):
     try:
-        headers = {
-            "Authorization": f"Bearer {GIGACHAT_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "model": "GigaChat",
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        response = requests.post("https://gigachat.api.sbercloud.ru/v1/chat/completions", headers=headers, json=data, timeout=10)
-        return response.json()["choices"][0]["message"]["content"]
+        response = client.chat.completions.create(
+            model="GigaChat:latest",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        return "Извините, временно нет доступа к таможенной информации. Попробуйте позже."
+        return f"❌ Ошибка GigaChat: {e}"
 
-def route_message(message: str) -> str:
+def gpt_answer(prompt):
     try:
-        if contains_keywords(message, GIGACHAT_KEYWORDS):
-            return ask_gigachat(message)
-        elif contains_keywords(message, GPT4_KEYWORDS):
-            return ask_gpt4(message)
-        else:
-            return ask_gpt35(message)
+        from openai import OpenAI
+        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        return f"Ошибка при обработке запроса: {e}"
+        return f"❌ Ошибка GPT: {e}"
