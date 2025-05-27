@@ -1,9 +1,9 @@
 import os
-import openai
 import requests
 from gigachat_token_loader import get_gigachat_token
+from openai import OpenAI
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 GIGACHAT_TOKEN = get_gigachat_token()
 
 GPT4_KEYWORDS = ["регистрация", "налог", "субсидия", "отчётность", "декларация"]
@@ -13,18 +13,18 @@ def contains_keywords(text, keywords):
     return any(word in text.lower() for word in keywords)
 
 def ask_gpt4(prompt):
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message["content"]
+    return response.choices[0].message.content
 
 def ask_gpt35(prompt):
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message["content"]
+    return response.choices[0].message.content
 
 def ask_gigachat(prompt):
     headers = {
