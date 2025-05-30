@@ -1,45 +1,27 @@
-from get_gigachat_token_final import get_gigachat_token
-from openai import OpenAI
+import requests
 import os
-
-# Получаем актуальный GigaChat токен
-GIGACHAT_TOKEN = get_gigachat_token()
-
-# Настройка GigaChat клиента (если используешь через OpenAI совместимый интерфейс)
-client = OpenAI(
-    api_key=GIGACHAT_TOKEN,
-    base_url="https://gigachat.devices.sberbank.ru/api/v1",
-    default_headers={
-        "Authorization": f"Bearer {GIGACHAT_TOKEN}",
-        "Content-Type": "application/json",
-    }
-)
 
 # Основная функция маршрутизации сообщений
 def route_message(text):
-    if "таможня" in text.lower():
-        return gigachat_answer(text)
-    else:
-        return gpt_answer(text)
-
-def gigachat_answer(prompt):
     try:
-        response = client.chat.completions.create(
-            model="GigaChat:latest",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"❌ Ошибка GigaChat: {e}"
+        res = requests.get("https://rag-tnved-production.up.railway.app/search", params={"query": text})
+        res.raise_for_status()
+        data = res.json()
+        result = data.get("result", "❌ Нет ответа")
+        matches = data.get("matches", [])
 
-def gpt_answer(prompt):
-    try:
-        from openai import OpenAI
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
+        blocks = []
+        if matches:
+            doc_texts = [f"- {m['code']}: {m['text']}" for m in matches]
+            doc_block = "📂 *Официально из базы ТН ВЭД:*
+" + "
+
+".join(doc_texts)
+            blocks.append(doc_block)
+
+        blocks.append("🧠 *Мнение модели:*
+" + result)
+        return "\n\n".join(blocks)
+
     except Exception as e:
-        return f"❌ Ошибка GPT: {e}"
+        return f"❌ Ошибка при запросе к RAG: {e}"
