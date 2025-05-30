@@ -13,14 +13,10 @@ def route_message(text):
         blocks = []
         if matches:
             doc_texts = [f"- {m['code']}: {m['text']}" for m in matches]
-            doc_block = "📂 *Официально из базы ТН ВЭД:*
-" + "
-
-".join(doc_texts)
+            doc_block = "📂 *Официально из базы ТН ВЭД:*\n\n" + "\n\n".join(doc_texts)
             blocks.append(doc_block)
 
-        blocks.append("🧠 *Мнение модели:*
-" + result)
+        blocks.append("🧠 *Мнение модели:*\n" + result)
         return "\n\n".join(blocks)
 
     except Exception as e:
