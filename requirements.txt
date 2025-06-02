@@ -3,6 +3,3 @@ uvicorn
 pyTelegramBotAPI
 python-dotenv
 requests
-pandas>=2.0.0
-dataclasses-json>=0.6.0
-structlog>=23.0.0
