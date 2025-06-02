@@ -1,12 +1,12 @@
 from fastapi import FastAPI
 from wed_expert_genspark_integration import GensparktWEDAgent, ProductClassification
 
-app = FastAPI()
+app = FastAPI(title="WED Expert API")
 genspark_agent = GensparktWEDAgent()
 
 @app.get("/")
 def root():
-    return {"message": "VED Expert is alive"}
+    return {"message": "WED Expert + Genspark API работает!"}
 
 @app.post("/api/genspark/classify")
 async def classify_with_genspark(
