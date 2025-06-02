@@ -7,6 +7,7 @@ genspark_agent = GensparktWEDAgent()
 @app.get("/")
 def root():
     return {"message": "VED Expert is alive"}
+
 @app.post("/api/genspark/classify")
 async def classify_with_genspark(
     name: str,
