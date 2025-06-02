@@ -4,3 +4,5 @@ fastapi
 uvicorn
 openai
 requests
+dataclasses-json>=0.6.0
+structlog>=23.0.0
