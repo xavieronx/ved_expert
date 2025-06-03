@@ -37,3 +37,18 @@ async def classify_with_genspark(
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+import threading
+from bot import bot
+
+def start_bot():
+    bot.infinity_polling()
+
+if __name__ == "__main__":
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=start_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Запускаем FastAPI
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
