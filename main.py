@@ -7,9 +7,6 @@ import time
 from ved_router import route_message
 from ved_database import VEDDatabase
 import logging
-import signal
-import sys
-import atexit
 
 # Настройка логирования
 logging.basicConfig(
@@ -19,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger('VEDBot')
 
 # FastAPI
-app = FastAPI(title="WED Expert API Fixed")
+app = FastAPI(title="WED Expert API")
 genspark_agent = GensparktWEDAgent()
 
 # Initialize VEDDatabase
@@ -33,40 +30,13 @@ bot_instance = None
 bot_thread = None
 is_bot_running = False
 
-def cleanup_bot():
-    """Очистка ресурсов бота при завершении"""
-    global bot_instance, is_bot_running
-    if bot_instance and is_bot_running:
-        try:
-            logger.info("Stopping bot...")
-            bot_instance.stop_polling()
-            is_bot_running = False
-            logger.info("Bot stopped successfully")
-        except Exception as e:
-            logger.error(f"Error stopping bot: {e}")
-
-def signal_handler(signum, frame):
-    """Обработчик сигналов завершения"""
-    logger.info(f"Received signal {signum}, shutting down...")
-    cleanup_bot()
-    sys.exit(0)
-
-# Регистрируем обработчики
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
-atexit.register(cleanup_bot)
-
 def create_bot():
-    """Создает экземпляр бота с защитой от дублирования"""
-    global bot_instance, is_bot_running
+    """Создает экземпляр бота"""
+    global bot_instance
     
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not found in environment variables")
         return None
-    
-    if bot_instance is not None:
-        logger.warning("Bot instance already exists")
-        return bot_instance
     
     try:
         bot_instance = telebot.TeleBot(BOT_TOKEN)
@@ -77,8 +47,8 @@ def create_bot():
         return None
 
 def start_bot():
-    """Запуск бота с защитой от конфликтов"""
-    global bot_instance, is_bot_running
+    """Запуск бота"""
+    global is_bot_running
     
     if is_bot_running:
         logger.warning("Bot is already running")
@@ -103,14 +73,9 @@ def start_bot():
         # Устанавливаем флаг
         is_bot_running = True
         
-        # Запускаем polling с обработкой ошибок
+        # Запускаем polling
         logger.info("Starting polling...")
-        bot.infinity_polling(
-            timeout=20,
-            long_polling_timeout=20,
-            none_stop=True,
-            interval=1
-        )
+        bot.infinity_polling(none_stop=True, interval=1)
         
     except Exception as e:
         logger.error(f"Bot error: {e}")
@@ -205,7 +170,7 @@ if bot:
 def read_root():
     return {
         "status": "running", 
-        "service": "WED Expert API Fixed",
+        "service": "WED Expert API",
         "bot_running": is_bot_running
     }
 
@@ -225,7 +190,7 @@ def restart_bot():
     
     try:
         # Останавливаем текущий бот
-        cleanup_bot()
+        is_bot_running = False
         time.sleep(3)
         
         # Создаем новый экземпляр
@@ -243,17 +208,14 @@ def restart_bot():
         logger.error(f"Failed to restart bot: {e}")
         return {"error": str(e)}
 
-# Запуск бота только если это главный процесс
-@app.on_event("startup")
-def startup_event():
-    """Событие запуска приложения"""
-    global bot_thread
+# Для прямого запуска
+if __name__ == "__main__":
+    import uvicorn
+    logger.info("Starting in standalone mode...")
     
-    logger.info("Starting WED Expert System...")
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
     
-    # Запускаем бота только если он еще не запущен
-    if not is_bot_running:
-        bot_thread = threading.Thread(target=start_bot, daemon=True)
-        bot_thread.start()
-    
-    logger.info("System started successfully")
+    # Запускаем FastAPI
+    uvicorn.run(app, host="0.0.0.0", port=8000)
