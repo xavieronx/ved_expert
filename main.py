@@ -5,6 +5,9 @@ import os
 import telebot
 from ved_router import route_message
 import re
+import hashlib
+import json
+from datetime import datetime, timedelta
 
 # FastAPI
 app = FastAPI(title="WED Expert API")
@@ -14,9 +17,84 @@ genspark_agent = GensparktWEDAgent()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Кэш результатов
+class ResultCache:
+    """Простой кэш результатов классификации"""
+    
+    def __init__(self, ttl_minutes=60):
+        self.cache = {}
+        self.ttl = timedelta(minutes=ttl_minutes)
+        self.stats = {"hits": 0, "misses": 0}
+    
+    def _generate_key(self, product):
+        """Генерирует ключ для кэша на основе параметров товара"""
+        data = f"{product.name}_{product.material}_{product.function}_{product.origin_country}"
+        return hashlib.md5(data.lower().encode()).hexdigest()
+    
+    def get(self, product):
+        """Получает результат из кэша"""
+        key = self._generate_key(product)
+        
+        if key in self.cache:
+            cached_item = self.cache[key]
+            if datetime.now() - cached_item['timestamp'] < self.ttl:
+                self.stats["hits"] += 1
+                return cached_item['result']
+            else:
+                # Удаляем устаревший элемент
+                del self.cache[key]
+        
+        self.stats["misses"] += 1
+        return None
+    
+    def set(self, product, result):
+        """Сохраняет результат в кэш"""
+        key = self._generate_key(product)
+        self.cache[key] = {
+            'result': result,
+            'timestamp': datetime.now()
+        }
+    
+    def clear_expired(self):
+        """Очищает устаревшие элементы кэша"""
+        now = datetime.now()
+        expired_keys = [
+            key for key, item in self.cache.items()
+            if now - item['timestamp'] > self.ttl
+        ]
+        for key in expired_keys:
+            del self.cache[key]
+    
+    def get_stats(self):
+        """Возвращает статистику кэша"""
+        total = self.stats["hits"] + self.stats["misses"]
+        hit_rate = self.stats["hits"] / total * 100 if total > 0 else 0
+        
+        return {
+            "cache_size": len(self.cache),
+            "hits": self.stats["hits"],
+            "misses": self.stats["misses"],
+            "hit_rate": f"{hit_rate:.1f}%"
+        }
+
+# Инициализируем кэш
+cache = ResultCache(ttl_minutes=60)
+
 @app.get("/")
 def root():
-    return {"message": "WED Expert + Genspark API работает!"}
+    return {"message": "WED Expert + Genspark API работает!", "cache_stats": cache.get_stats()}
+
+@app.get("/api/cache/stats")
+def get_cache_stats():
+    """Получить статистику кэша"""
+    return cache.get_stats()
+
+@app.post("/api/cache/clear")
+def clear_cache():
+    """Очистить кэш"""
+    cache.cache.clear()
+    cache.stats = {"hits": 0, "misses": 0}
+    return {"message": "Кэш очищен"}
 
 @app.post("/api/genspark/classify")
 async def classify_with_genspark(
@@ -33,8 +111,33 @@ async def classify_with_genspark(
             origin_country=origin_country, value=value
         )
         
+        # Проверяем кэш
+        cached_result = cache.get(product)
+        if cached_result:
+            # Пересчитываем стоимость для актуальной цены
+            cost_calc = genspark_agent.calculate_total_cost(cached_result, value)
+            
+            return {
+                "success": True,
+                "tn_ved_code": cached_result.code,
+                "description": cached_result.description,
+                "confidence": f"{cached_result.confidence*100:.1f}%",
+                "total_cost": cost_calc['total_cost'],
+                "duty_amount": cost_calc['duty_amount'],
+                "vat_amount": cost_calc['vat_amount'],
+                "customs_fee": cost_calc['customs_fee'],
+                "broker_fee": cost_calc['broker_fee'],
+                "breakdown": cost_calc['breakdown'],
+                "requirements": cached_result.requirements,
+                "cached": True
+            }
+        
+        # Если нет в кэше - классифицируем
         result = genspark_agent.determine_tn_ved(product)
         cost_calc = genspark_agent.calculate_total_cost(result, value)
+        
+        # Сохраняем в кэш
+        cache.set(product, result)
         
         return {
             "success": True,
@@ -47,7 +150,8 @@ async def classify_with_genspark(
             "customs_fee": cost_calc['customs_fee'],
             "broker_fee": cost_calc['broker_fee'],
             "breakdown": cost_calc['breakdown'],
-            "requirements": result.requirements
+            "requirements": result.requirements,
+            "cached": False
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -90,7 +194,10 @@ class SmartQueryParser:
             'япония': 'JP', 'японии': 'JP', 'japan': 'JP',
             'корея': 'KR', 'кореи': 'KR', 'korea': 'KR',
             'франция': 'FR', 'франции': 'FR', 'france': 'FR',
-            'турция': 'TR', 'турции': 'TR', 'turkey': 'TR'
+            'турция': 'TR', 'турции': 'TR', 'turkey': 'TR',
+            'вьетнам': 'VN', 'вьетнама': 'VN', 'vietnam': 'VN',
+            'индия': 'IN', 'индии': 'IN', 'india': 'IN',
+            'польша': 'PL', 'польши': 'PL', 'poland': 'PL'
         }
         
         self.default_values = {
@@ -99,9 +206,41 @@ class SmartQueryParser:
             'смартфон': {'material': 'алюминий, стекло', 'function': 'мобильная связь', 'value': 120000},
             'куртка': {'material': 'полиэстер, синтепон', 'function': 'защита от холода', 'value': 8000},
             'ноутбук': {'material': 'пластик, металл', 'function': 'вычисления', 'value': 80000},
+            'компьютер': {'material': 'пластик, металл', 'function': 'вычисления', 'value': 60000},
+            'планшет': {'material': 'алюминий, стекло', 'function': 'вычисления', 'value': 40000},
             'часы': {'material': 'металл, стекло', 'function': 'показ времени', 'value': 15000},
             'книга': {'material': 'бумага', 'function': 'чтение', 'value': 1000},
-            'шоколад': {'material': 'какао, сахар', 'function': 'питание', 'value': 500}
+            'шоколад': {'material': 'какао, сахар', 'function': 'питание', 'value': 500},
+            'вино': {'material': 'виноград', 'function': 'алкогольный напиток', 'value': 2000},
+            'водка': {'material': 'этиловый спирт', 'function': 'алкогольный напиток', 'value': 1500},
+            'ботинки': {'material': 'кожа, резина', 'function': 'обувь', 'value': 12000},
+            'кроссовки': {'material': 'текстиль, резина', 'function': 'спортивная обувь', 'value': 8000},
+            'автомобиль': {'material': 'металл, пластик', 'function': 'транспорт', 'value': 1500000},
+            'косметика': {'material': 'химические соединения', 'function': 'уход за кожей', 'value': 3000},
+            'игрушка': {'material': 'пластик', 'function': 'игра', 'value': 2000}
+        }
+        
+        # Расширенные синонимы
+        self.synonyms = {
+            'iphone': 'смартфон',
+            'samsung': 'смартфон',
+            'xiaomi': 'смартфон',
+            'huawei': 'смартфон',
+            'macbook': 'ноутбук',
+            'lenovo': 'ноутбук',
+            'dell': 'ноутбук',
+            'asus': 'ноутбук',
+            'delonghi': 'кофемашина',
+            'nespresso': 'кофемашина',
+            'rolex': 'часы',
+            'omega': 'часы',
+            'casio': 'часы',
+            'nike': 'кроссовки',
+            'adidas': 'кроссовки',
+            'puma': 'кроссовки',
+            'toyota': 'автомобиль',
+            'bmw': 'автомобиль',
+            'mercedes': 'автомобиль'
         }
     
     def parse_query(self, text):
@@ -133,24 +272,28 @@ class SmartQueryParser:
     
     def _extract_product_name(self, text):
         """Извлекает название товара из текста"""
+        # Сначала проверяем прямые совпадения
         for product in self.default_values.keys():
             if product in text:
                 return product
         
-        # Поиск по ключевым словам
-        keywords = {
-            'iphone': 'смартфон',
-            'samsung': 'смартфон',
-            'macbook': 'ноутбук',
-            'lenovo': 'ноутбук',
-            'delonghi': 'кофемашина',
-            'rolex': 'часы',
-            'adidas': 'куртка'
-        }
-        
-        for keyword, product in keywords.items():
-            if keyword in text:
+        # Затем проверяем синонимы
+        for synonym, product in self.synonyms.items():
+            if synonym in text:
                 return product
+        
+        # Дополнительные паттерны
+        if any(word in text for word in ['кофе', 'эспрессо', 'капучино']):
+            return 'кофемашина'
+        
+        if any(word in text for word in ['мобильный', 'phone', 'android', 'ios']):
+            return 'смартфон'
+            
+        if any(word in text for word in ['laptop', 'notebook']):
+            return 'ноутбук'
+            
+        if any(word in text for word in ['авто', 'машина', 'car']):
+            return 'автомобиль'
         
         return None
     
@@ -168,14 +311,21 @@ class SmartQueryParser:
             r'(\d+(?:\s?\d{3})*)\s*(?:руб|рублей?)',
             r'(\d+(?:\s?\d{3})*)\s*(?:долларов?|usd|\$)',
             r'(\d+(?:\s?\d{3})*)\s*(?:евро|eur|€)',
-            r'(\d+(?:\s?\d{3})*)\s*(?:юаней?|yuan|¥)'
+            r'(\d+(?:\s?\d{3})*)\s*(?:юаней?|yuan|¥)',
+            r'(\d+(?:\s?\d{3})*)\s*(?:тысяч?|к|k)',
         ]
         
         for pattern in patterns:
             match = re.search(pattern, text.lower())
             if match:
                 value_str = match.group(1).replace(' ', '')
-                return float(value_str)
+                value = float(value_str)
+                
+                # Если указаны тысячи
+                if 'тысяч' in pattern or 'к' in pattern or 'k' in pattern:
+                    value *= 1000
+                
+                return value
         
         return None
     
@@ -190,34 +340,59 @@ class SmartQueryParser:
 # Инициализируем парсер
 query_parser = SmartQueryParser()
 
+# Статистика использования
+usage_stats = {
+    "total_queries": 0,
+    "successful_classifications": 0,
+    "cache_hits": 0,
+    "start_time": datetime.now()
+}
+
+@app.get("/api/stats")
+def get_usage_stats():
+    """Получить статистику использования"""
+    uptime = datetime.now() - usage_stats["start_time"]
+    
+    return {
+        "uptime_hours": uptime.total_seconds() / 3600,
+        "total_queries": usage_stats["total_queries"],
+        "successful_classifications": usage_stats["successful_classifications"],
+        "success_rate": f"{usage_stats['successful_classifications'] / max(usage_stats['total_queries'], 1) * 100:.1f}%",
+        "cache_stats": cache.get_stats()
+    }
+
 # Улучшенные Bot handlers
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     welcome_text = """👋 Привет! Я WED Expert с поддержкой Genspark AI!
 
-🎯 Что я умею:
+🎯 **Что я умею:**
 • Классифицировать товары по ТН ВЭД
 • Рассчитывать пошлины и налоги
 • Определять требования для импорта
+• Кэшировать результаты для быстрого ответа
 
-📝 Примеры запросов:
+📝 **Примеры запросов:**
 "Хочу импортировать кофемашину из Италии за 25000 рублей"
-"Телефон iPhone из Китая"
+"iPhone из Китая стоимостью 120к рублей"
 "Куртка зимняя из Турции"
+"Автомобиль BMW из Германии"
 
-💡 Просто опишите товар и я всё посчитаю!"""
+💡 Просто опишите товар и я всё посчитаю!
+
+⚡ *Powered by Genspark AI с кэшированием*"""
     
     bot.reply_to(message, welcome_text)
 
 @bot.message_handler(commands=['help'])
 def send_help(message):
-    help_text = """❓ Как пользоваться WED Expert:
+    help_text = """❓ **Как пользоваться WED Expert:**
 
 1️⃣ Опишите товар простыми словами
 2️⃣ Укажите страну происхождения
 3️⃣ Добавьте стоимость (по желанию)
 
-🔍 Поддерживаемые товары:
+🔍 **Поддерживаемые товары:**
 📱 Электроника: телефоны, ноутбуки, планшеты
 ☕ Бытовая техника: кофемашины, чайники
 👕 Одежда: куртки, пальто, костюмы
@@ -229,25 +404,65 @@ def send_help(message):
 🍷 Алкогольные напитки
 🪑 Мебель
 
-⚡ Powered by Genspark AI"""
+🌍 **Поддерживаемые страны:**
+🇨🇳 Китай • 🇩🇪 Германия • 🇮🇹 Италия • 🇺🇸 США
+🇯🇵 Япония • 🇰🇷 Корея • 🇫🇷 Франция • 🇹🇷 Турция
+🇻🇳 Вьетнам • 🇮🇳 Индия • 🇵🇱 Польша
+
+⚡ *Результаты кэшируются для быстрого ответа!*"""
     
     bot.reply_to(message, help_text)
+
+@bot.message_handler(commands=['stats'])
+def send_stats(message):
+    """Показать статистику бота"""
+    stats = cache.get_stats()
+    uptime = datetime.now() - usage_stats["start_time"]
+    
+    stats_text = f"""📊 **Статистика WED Expert:**
+
+⏱️ **Время работы:** {uptime.days} дн. {uptime.seconds//3600} ч.
+📈 **Всего запросов:** {usage_stats['total_queries']}
+✅ **Успешных классификаций:** {usage_stats['successful_classifications']}
+🎯 **Процент успеха:** {usage_stats['successful_classifications'] / max(usage_stats['total_queries'], 1) * 100:.1f}%
+
+💾 **Кэш:**
+• Размер: {stats['cache_size']} записей
+• Попаданий: {stats['hits']}
+• Промахов: {stats['misses']}
+• Эффективность: {stats['hit_rate']}
+
+⚡ *Система работает оптимально!*"""
+    
+    bot.reply_to(message, stats_text)
 
 @bot.message_handler(func=lambda message: True)
 def handle_messages(message):
     try:
         text = message.text
+        usage_stats["total_queries"] += 1
         
         # Проверяем, можем ли распарсить как товар
         product = query_parser.parse_query(text)
         
         if product:
-            # Получаем результат от Genspark
-            result = genspark_agent.determine_tn_ved(product)
+            # Проверяем кэш
+            cached_result = cache.get(product)
+            cache_indicator = "💾" if cached_result else "🔄"
+            
+            # Получаем результат (из кэша или новый)
+            if cached_result:
+                result = cached_result
+                usage_stats["cache_hits"] += 1
+            else:
+                result = genspark_agent.determine_tn_ved(product)
+                cache.set(product, result)
+            
             cost_calc = genspark_agent.calculate_total_cost(result, product.value)
+            usage_stats["successful_classifications"] += 1
             
             # Форматируем детальный ответ
-            response = f"""🤖 **Анализ Genspark AI**
+            response = f"""{cache_indicator} **Анализ Genspark AI**
 
 📦 **Товар:** {product.name.title()}
 🌍 **Страна:** {product.origin_country}
@@ -271,7 +486,7 @@ def handle_messages(message):
 📋 **Основные требования:**
 {chr(10).join(['• ' + req for req in result.requirements[:4]])}
 
-⚡ *Powered by Genspark AI*"""
+⚡ *{'Из кэша' if cached_result else 'Новый расчёт'} • Powered by Genspark AI*"""
             
             bot.reply_to(message, response, parse_mode='Markdown')
             
@@ -283,12 +498,24 @@ def handle_messages(message):
     except Exception as e:
         error_text = f"""❌ Произошла ошибка: {str(e)}
 
-💡 Попробуйте:
+💡 **Попробуйте:**
 • Описать товар проще: "телефон из Китая"
 • Указать конкретную категорию
-• Использовать команду /help для примеров"""
+• Использовать команду /help для примеров
+• Проверить статистику: /stats"""
         
         bot.reply_to(message, error_text)
+
+# Автоматическая очистка кэша каждые 10 минут
+def cache_cleanup():
+    while True:
+        import time
+        time.sleep(600)  # 10 минут
+        cache.clear_expired()
+
+# Запуск очистки кэша в отдельном потоке
+cleanup_thread = threading.Thread(target=cache_cleanup, daemon=True)
+cleanup_thread.start()
 
 # Запуск бота в отдельном потоке
 def start_bot():
