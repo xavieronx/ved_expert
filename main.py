@@ -257,15 +257,3 @@ def startup_event():
         bot_thread.start()
     
     logger.info("System started successfully")
-
-# Для прямого запуска
-if __name__ == "__main__":
-    import uvicorn
-    logger.info("Starting in standalone mode...")
-    
-    # Запускаем бота в отдельном потоке
-    bot_thread = threading.Thread(target=start_bot, daemon=True)
-    bot_thread.start()
-    
-    # Запускаем FastAPI
-    uvicorn.run(app, host="0.0.0.0", port=8000)
