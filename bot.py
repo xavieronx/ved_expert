@@ -9,7 +9,7 @@ genspark_agent = GensparktWEDAgent()
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "Здравствуйте! Я — ВЭД Эксперт с поддержкой Genspark AI. Задавайте ваш вопрос или используйте /genspark для AI анализа.")
+    bot.reply_to(message, "Здравствуйте! Я — ВЭД Эксперт с поддержкой Genspark AI.\n\nКоманды:\n/start - начало\n/genspark - AI анализ\n\nИли просто задавайте вопросы!")
 
 @bot.message_handler(commands=['genspark'])
 def genspark_classify(message):
@@ -19,24 +19,30 @@ def genspark_classify(message):
 def handle_all_messages(message):
     user_input = message.text
     
-    # Если упоминается genspark или AI - используем Genspark
-    if any(word in user_input.lower() for word in ['genspark', 'ai', 'кофемашина', 'смартфон']):
-        try:
-            # Простая логика определения товара
+    try:
+        # Если упоминается genspark или AI - используем Genspark
+        if any(word in user_input.lower() for word in ['genspark', 'ai', 'кофемашина', 'смартфон']):
+            
             if "кофе" in user_input.lower():
                 product = ProductClassification(
-                    name="Кофемашина", material="металл, пластик",
-                    function="приготовление кофе", processing_level="готовое изделие",
-                    origin_country="IT", value=25000.0
+                    name="Кофемашина", 
+                    material="металл, пластик",
+                    function="приготовление кофе", 
+                    processing_level="готовое изделие",
+                    origin_country="IT", 
+                    value=25000.0
                 )
             elif "телефон" in user_input.lower() or "смартфон" in user_input.lower():
                 product = ProductClassification(
-                    name="Смартфон", material="алюминий, стекло",
-                    function="мобильная связь", processing_level="готовое изделие",
-                    origin_country="CN", value=120000.0
+                    name="Смартфон", 
+                    material="алюминий, стекло",
+                    function="мобильная связь", 
+                    processing_level="готовое изделие",
+                    origin_country="CN", 
+                    value=120000.0
                 )
             else:
-                bot.reply_to(message, "🤖 Укажите конкретный товар: кофемашина, смартфон и т.д.")
+                bot.reply_to(message, "🤖 Укажите конкретный товар: кофемашина, смартфон")
                 return
             
             result = genspark_agent.determine_tn_ved(product)
@@ -53,12 +59,13 @@ def handle_all_messages(message):
             
             bot.reply_to(message, response)
             
-        except Exception as e:
-            bot.reply_to(message, f"Ошибка Genspark: {str(e)}")
-    else:
-        # Обычная логика через RAG
-        response = route_message(user_input)
-        bot.reply_to(message, response)
+        else:
+            # Обычная логика через RAG
+            response = route_message(user_input)
+            bot.reply_to(message, response)
+            
+    except Exception as e:
+        bot.reply_to(message, f"Ошибка: {str(e)}")
 
 if __name__ == "__main__":
     bot.infinity_polling()
