@@ -68,4 +68,3 @@ def handle_all_messages(message):
         bot.reply_to(message, f"Ошибка: {str(e)}")
 
 if __name__ == "__main__":
-    bot.infinity_polling()
