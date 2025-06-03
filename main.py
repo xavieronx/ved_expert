@@ -3,9 +3,11 @@ import os
 import telebot
 import logging
 import json
+from ved_database import VEDDatabase
+from ved_router import route_message
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("TEST_BOT")
+logger = logging.getLogger("VED_BOT")
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL = "https://vedexpert-production.up.railway.app/webhook"
@@ -17,38 +19,27 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 app = FastAPI()
 
+# Инициализируем базу данных
+ved_db = VEDDatabase()
+
 @bot.message_handler(func=lambda message: True)
-def echo_all(message):
+def handle_message(message):
     logger.info(f"📩 Сообщение от {message.from_user.id}: {message.text}")
-    bot.reply_to(message, f"✅ Принято: {message.text}")
+    response = route_message(message.text, ved_db)
+    bot.reply_to(message, response)
 
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
         json_data = await request.json()
-        logger.info(f"🛰️ Webhook получен: {json_data}")
+        logger.info(f"🛰️ Webhook получен")
         update = telebot.types.Update.de_json(json_data)
         bot.process_new_updates([update])
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"❌ Ошибка webhook: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error"}
 
-@app.get("/set_webhook")
-def set_webhook():
-    try:
-        bot.remove_webhook()
-        result = bot.set_webhook(url=WEBHOOK_URL)
-        if result:
-            logger.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
-            return {"status": "webhook set", "url": WEBHOOK_URL}
-        else:
-            logger.error("❌ Ошибка установки webhook")
-            return {"status": "error", "message": "Не удалось установить webhook"}
-    except Exception as e:
-        logger.error(f"❌ Ошибка установки webhook: {e}")
-        return {"status": "error", "message": str(e)}
-
-@app.get("/")
-def root():
-    return {"status": "bot online"}
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
