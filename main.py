@@ -4,210 +4,268 @@ import threading
 import os
 import telebot
 import time
-from enhanced_ved_system import EnhancedVEDExpertSystem
+from ved_router import route_message
+from ved_database import VEDDatabase
 import logging
+import signal
+import sys
+import atexit
 
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('bot.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('VEDBot')
 
 # FastAPI
-app = FastAPI(title="Enhanced WED Expert API")
+app = FastAPI(title="WED Expert API Fixed")
 genspark_agent = GensparktWEDAgent()
 
-# Инициализация расширенной системы ВЭД
-ved_system = EnhancedVEDExpertSystem(genspark_agent)
+# Initialize VEDDatabase
+ved_db = VEDDatabase()
 
 # Telegram Bot
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-bot = telebot.TeleBot(BOT_TOKEN)
 
-# Статистика использования
-usage_stats = {
-    "total_queries": 0,
-    "successful_queries": 0,
-    "genspark_queries": 0,
-    "cache_hits": 0
-}
+# ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ КОНТРОЛЯ БОТА
+bot_instance = None
+bot_thread = None
+is_bot_running = False
 
-@app.get("/")
-def read_root():
-    return {
-        "status": "running", 
-        "service": "Enhanced WED Expert API",
-        "version": "2.0.0"
-    }
+def cleanup_bot():
+    """Очистка ресурсов бота при завершении"""
+    global bot_instance, is_bot_running
+    if bot_instance and is_bot_running:
+        try:
+            logger.info("Stopping bot...")
+            bot_instance.stop_polling()
+            is_bot_running = False
+            logger.info("Bot stopped successfully")
+        except Exception as e:
+            logger.error(f"Error stopping bot: {e}")
 
-@app.get("/stats")
-def get_statistics():
-    """Получить статистику использования"""
-    cache_stats = ved_system.database.cache.stats if ved_system.database.cache else {}
+def signal_handler(signum, frame):
+    """Обработчик сигналов завершения"""
+    logger.info(f"Received signal {signum}, shutting down...")
+    cleanup_bot()
+    sys.exit(0)
+
+# Регистрируем обработчики
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+atexit.register(cleanup_bot)
+
+def create_bot():
+    """Создает экземпляр бота с защитой от дублирования"""
+    global bot_instance, is_bot_running
     
-    return {
-        **usage_stats,
-        "cache_stats": cache_stats,
-        "database_codes": len(ved_system.database.database.get("codes", []))
-    }
-
-@app.get("/classify")
-def classify_product(
-    name: str,
-    material: str = "",
-    function: str = "",
-    processing_level: str = "",
-    origin_country: str = "",
-    value: float = 0.0
-):
-    """API endpoint для классификации товаров"""
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN not found in environment variables")
+        return None
+    
+    if bot_instance is not None:
+        logger.warning("Bot instance already exists")
+        return bot_instance
+    
     try:
-        product = ProductClassification(
-            name=name,
-            material=material,
-            function=function,
-            processing_level=processing_level,
-            origin_country=origin_country,
-            value=value
-        )
-        
-        result = genspark_agent.classify_product(product)
-        usage_stats["genspark_queries"] += 1
-        
-        return {"result": result, "source": "genspark_api"}
-        
+        bot_instance = telebot.TeleBot(BOT_TOKEN)
+        logger.info("Bot instance created successfully")
+        return bot_instance
     except Exception as e:
-        logger.error(f"Classification error: {e}")
-        return {"error": str(e)}
+        logger.error(f"Failed to create bot: {e}")
+        return None
 
 def start_bot():
-    """Запуск Telegram бота"""
+    """Запуск бота с защитой от конфликтов"""
+    global bot_instance, is_bot_running
+    
+    if is_bot_running:
+        logger.warning("Bot is already running")
+        return
+    
     try:
-        logger.info("Starting Telegram bot...")
-        # Очистка webhook
-        bot.remove_webhook()
-        time.sleep(1)
-        bot.infinity_polling()
+        bot = create_bot()
+        if not bot:
+            logger.error("Failed to create bot instance")
+            return
+        
+        logger.info("Starting bot...")
+        
+        # Очистка webhook перед стартом
+        try:
+            bot.remove_webhook()
+            time.sleep(2)
+            logger.info("Webhook cleared")
+        except Exception as e:
+            logger.warning(f"Failed to clear webhook: {e}")
+        
+        # Устанавливаем флаг
+        is_bot_running = True
+        
+        # Запускаем polling с обработкой ошибок
+        logger.info("Starting polling...")
+        bot.infinity_polling(
+            timeout=20,
+            long_polling_timeout=20,
+            none_stop=True,
+            interval=1
+        )
+        
     except Exception as e:
         logger.error(f"Bot error: {e}")
+        is_bot_running = False
 
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    """Обработчик команд start и help"""
-    welcome_text = """Добро пожаловать в ВЭД Эксперт 2.0! 🚀
+# Создаем бота
+bot = create_bot()
+
+if bot:
+    @bot.message_handler(commands=['start', 'help'])
+    def send_welcome(message):
+        """Обработчик команд start и help"""
+        welcome_text = """Добро пожаловать в ВЭД Эксперт! 🚀
 
 🎯 **Возможности:**
 • Поиск по кодам ТН ВЭД (10 цифр)
 • Поиск по названию товара
 • Экспертный анализ через ИИ
-• Официальные данные + рекомендации
 
 📝 **Команды:**
 /start - это сообщение
 /help - справка
-/stats - статистика системы
 /genspark - ИИ анализ товара
 
 💡 **Примеры запросов:**
 • 8471300000
 • ноутбук
 • свинина замороженная
-• автомобиль BMW
 
 Просто введите название товара или код!"""
-    
-    bot.reply_to(message, welcome_text)
-    logger.info(f"Welcome sent to user {message.from_user.id}")
+        
+        try:
+            bot.reply_to(message, welcome_text)
+            logger.info(f"Welcome sent to user {message.from_user.id}")
+        except Exception as e:
+            logger.error(f"Error sending welcome: {e}")
 
-@bot.message_handler(commands=['stats'])
-def send_stats(message):
-    """Отправляет статистику использования"""
-    cache_stats = ved_system.database.cache.stats
-    
-    stats_text = f"""📊 **Статистика ВЭД Эксперт:**
+    @bot.message_handler(commands=['genspark'])
+    def genspark_classify(message):
+        """Принудительный анализ через Genspark"""
+        try:
+            bot.reply_to(message, "🧠 Отправьте название товара для углубленного ИИ-анализа\n\nПример: кофемашина DeLonghi 1200W")
+        except Exception as e:
+            logger.error(f"Error in genspark command: {e}")
 
-🔍 **Запросы:**
-• Всего: {usage_stats['total_queries']}
-• Успешных: {usage_stats['successful_queries']}
-• ИИ анализов: {usage_stats['genspark_queries']}
+    @bot.message_handler(func=lambda message: True)
+    def handle_all_messages(message):
+        """Главный обработчик сообщений"""
+        try:
+            user_input = message.text
+            user_id = message.from_user.id
+            
+            logger.info(f"Query from user {user_id}: {user_input[:50]}...")
+            
+            # Проверяем, нужен ли принудительный Genspark анализ
+            force_genspark = any(keyword.lower() in user_input.lower() 
+                               for keyword in ['genspark', 'ai', 'нейросеть', 'анализ', 'ии'])
+            
+            if force_genspark:
+                # Принудительный Genspark анализ
+                logger.info("Force Genspark analysis requested")
+                
+                product = ProductClassification(
+                    name=user_input,
+                    material="",
+                    function="",
+                    processing_level="",
+                    origin_country="",
+                    value=0.0
+                )
+                
+                genspark_result = genspark_agent.classify_product(product)
+                response = f"🧠 **ИИ-АНАЛИЗ ТОВАРА:**\n\n{genspark_result}"
+                
+            else:
+                # Обычный поиск через базу данных
+                response = route_message(user_input, ved_db)
+            
+            # Отправляем ответ
+            bot.reply_to(message, response, parse_mode="Markdown")
+            logger.info(f"Response sent to user {user_id}")
+            
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+            try:
+                error_response = f"❌ Произошла ошибка при обработке запроса: {str(e)}"
+                bot.reply_to(message, error_response)
+            except:
+                logger.error("Failed to send error response")
 
-💾 **Кэш:**
-• Попаданий: {cache_stats['hits']}
-• Промахов: {cache_stats['misses']}
+@app.get("/")
+def read_root():
+    return {
+        "status": "running", 
+        "service": "WED Expert API Fixed",
+        "bot_running": is_bot_running
+    }
 
-📚 **База данных:**
-• Товаров в базе: {len(ved_system.database.database.get('codes', []))}"""
-    
-    bot.reply_to(message, stats_text)
+@app.get("/bot/status")
+def bot_status():
+    """Статус бота"""
+    return {
+        "bot_running": is_bot_running,
+        "bot_instance_exists": bot_instance is not None,
+        "bot_token_configured": BOT_TOKEN is not None
+    }
 
-@bot.message_handler(commands=['genspark'])
-def genspark_classify(message):
-    """Принудительный анализ через Genspark"""
-    bot.reply_to(message, "🧠 Отправьте название товара для углубленного ИИ-анализа\n\nПример: кофемашина DeLonghi 1200W")
-
-@bot.message_handler(func=lambda message: True)
-def handle_all_messages(message):
-    """Главный обработчик сообщений"""
-    user_input = message.text
-    user_id = message.from_user.id
-    
-    # Обновляем статистику
-    usage_stats["total_queries"] += 1
-    
-    logger.info(f"Query from user {user_id}: {user_input[:50]}...")
+@app.get("/bot/restart")
+def restart_bot():
+    """Перезапуск бота"""
+    global bot_instance, is_bot_running, bot_thread
     
     try:
-        # Проверяем, нужен ли принудительный Genspark анализ
-        force_genspark = any(keyword.lower() in user_input.lower() 
-                           for keyword in ['genspark', 'ai', 'нейросеть', 'анализ', 'ии'])
+        # Останавливаем текущий бот
+        cleanup_bot()
+        time.sleep(3)
         
-        if force_genspark:
-            # Принудительный Genspark анализ
-            logger.info("Force Genspark analysis requested")
-            
-            product = ProductClassification(
-                name=user_input,
-                material="",
-                function="",
-                processing_level="",
-                origin_country="",
-                value=0.0
-            )
-            
-            genspark_result = genspark_agent.classify_product(product)
-            usage_stats["genspark_queries"] += 1
-            
-            response = f"🧠 **ИИ-АНАЛИЗ ТОВАРА:**\n\n{genspark_result}"
-            
-        else:
-            # Обычный поиск через расширенную систему
-            response = ved_system.process_query(user_input)
-            usage_stats["successful_queries"] += 1
+        # Создаем новый экземпляр
+        bot_instance = None
         
-        # Отправляем ответ
-        bot.reply_to(message, response, parse_mode="Markdown")
-        logger.info(f"Response sent to user {user_id}")
+        # Запускаем в новом потоке
+        if bot_thread and bot_thread.is_alive():
+            bot_thread.join(timeout=5)
         
+        bot_thread = threading.Thread(target=start_bot, daemon=True)
+        bot_thread.start()
+        
+        return {"status": "bot restarted"}
     except Exception as e:
-        logger.error(f"Error processing message: {e}")
-        error_response = f"❌ Произошла ошибка при обработке запроса: {str(e)}"
-        bot.reply_to(message, error_response)
+        logger.error(f"Failed to restart bot: {e}")
+        return {"error": str(e)}
 
+# Запуск бота только если это главный процесс
 @app.on_event("startup")
 def startup_event():
     """Событие запуска приложения"""
-    logger.info("Starting Enhanced VED Expert System...")
-    threading.Thread(target=start_bot, daemon=True).start()
+    global bot_thread
+    
+    logger.info("Starting WED Expert System...")
+    
+    # Запускаем бота только если он еще не запущен
+    if not is_bot_running:
+        bot_thread = threading.Thread(target=start_bot, daemon=True)
+        bot_thread.start()
+    
     logger.info("System started successfully")
 
 # Для прямого запуска
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting in standalone mode...")
-    threading.Thread(target=start_bot, daemon=True).start()
+    
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
+    
+    # Запускаем FastAPI
     uvicorn.run(app, host="0.0.0.0", port=8000)
