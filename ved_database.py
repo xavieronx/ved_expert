@@ -1,93 +1,100 @@
-import os
 import json
-import csv
+import os
+from pathlib import Path
 
 class VEDDatabase:
     """Класс для работы с базой данных ТН ВЭД"""
-
-    def __init__(self, data_path):
-        """Инициализация с путем к файлам базы данных"""
+    
+    def __init__(self, data_path=None):
+        if data_path is None:
+            # Путь к файлам базы данных в том же каталоге
+            data_path = Path(__file__).parent
+        else:
+            data_path = Path(data_path)
+        
         self.data_path = data_path
-        self.tnved_data = {}
+        self.database = {}
         self.duties = {}
-        self.certification_reqs = {}
-        self.product_certification = {}
+        self.certification = {}
         self.restrictions = {}
+        self.product_certification = {}
         self.antidumping = {}
-
-        # Загрузка данных
-        self._load_data()
-
-    def _load_data(self):
-        """Загрузка всех данных из файлов"""
-        # Загрузка основной базы ТН ВЭД
-        with open(os.path.join(self.data_path, 'tnved_database.json'), 'r', encoding='utf-8') as f:
-            self.tnved_data = json.load(f)
-
-        # Загрузка пошлин
-        with open(os.path.join(self.data_path, 'duties.json'), 'r', encoding='utf-8') as f:
-            self.duties = json.load(f)
-
-        # Загрузка сертификации
-        with open(os.path.join(self.data_path, 'certification.json'), 'r', encoding='utf-8') as f:
-            self.certification_reqs = json.load(f)
-
-        # Загрузка сертификации по товарам
-        with open(os.path.join(self.data_path, 'product_certification.json'), 'r', encoding='utf-8') as f:
-            self.product_certification = json.load(f)
-
-        # Загрузка ограничений
-        with open(os.path.join(self.data_path, 'restrictions.json'), 'r', encoding='utf-8') as f:
-            self.restrictions = json.load(f)
-
-        # Загрузка антидемпинга
-        with open(os.path.join(self.data_path, 'antidumping.json'), 'r', encoding='utf-8') as f:
-            self.antidumping = json.load(f)
-
+        
+        self._load_database()
+    
+    def _load_database(self):
+        """Загружает все компоненты базы данных"""
+        try:
+            # Основная база данных
+            with open(self.data_path / "tnved_database.json", "r", encoding="utf-8") as f:
+                self.database = json.load(f)
+            
+            # Сертификация (может не существовать)
+            cert_file = self.data_path / "certification.json"
+            if cert_file.exists():
+                with open(cert_file, "r", encoding="utf-8") as f:
+                    self.certification = json.load(f)
+            
+            print("✅ VEDDatabase loaded successfully")
+            
+        except FileNotFoundError as e:
+            print(f"❌ Database file not found: {e}")
+            self.database = {"codes": [], "groups": []}
+        except Exception as e:
+            print(f"❌ Error loading database: {e}")
+            self.database = {"codes": [], "groups": []}
+    
+    def search_product(self, query):
+        """Поиск товара по коду или названию"""
+        query = query.strip().lower()
+        
+        if not self.database.get("codes"):
+            return None
+        
+        # Поиск по коду
+        for product in self.database["codes"]:
+            code = product.get("code", "").lower()
+            name = product.get("name", "").lower()
+            
+            if query in code or query in name:
+                return {"product": product}
+        
+        return None
+    
     def get_product_by_code(self, code):
         """Получение информации о товаре по коду ТН ВЭД"""
-        return self.tnved_data.get('codes', {}).get(code, None)
-
+        if not self.database.get("codes"):
+            return None
+            
+        for product in self.database["codes"]:
+            if product.get("code") == code:
+                return product
+        return None
+    
     def get_duties(self, code, country=None):
-        """Получение пошлин для товара по коду и стране"""
-        product_duties = self.duties.get(code, {})
-        if country:
-            return product_duties.get(country, {})
-        return product_duties
-
+        """Получение информации о пошлинах"""
+        product = self.get_product_by_code(code)
+        if product and "duties" in product:
+            duties = product["duties"]
+            if country:
+                return duties.get(country)
+            return duties
+        return None
+    
     def get_certification_requirements(self, code):
         """Получение требований сертификации для товара"""
-        # Получаем коды требований
-        cert_codes = self.product_certification.get(code, [])
-        # Преобразуем коды в полное описание
-        cert_details = []
-        for cert_code in cert_codes:
-            detail = self.certification_reqs.get('requirements', {}).get(cert_code, '')
-            if detail:
-                cert_details.append({
-                    'code': cert_code,
-                    'description': detail
-                })
-        return cert_details
-
+        product = self.get_product_by_code(code)
+        if product:
+            return product.get("certification", [])
+        return []
+    
     def check_restrictions(self, code):
-        """Проверка ограничений для кода ТН ВЭД"""
-        result = []
-
-        for restriction in self.restrictions.get('items', []):
-            pattern = restriction.get('code_pattern', '')
-            # Проверка соответствия кода шаблону
-            if pattern.endswith('*'):
-                if code.startswith(pattern[:-1]):
-                    result.append(restriction)
-            elif code == pattern:
-                result.append(restriction)
-
-        return result
-
-    def get_antidumping(self, code, country=None):
-        """Получение антидемпинговых пошлин"""
-        antidump_measures = self.antidumping.get(code, [])
-        if country:
-            return [m for m in antidump_measures if m.get('country') == country]
-        return antidump_measures
+        """Проверка ограничений для товара"""
+        product = self.get_product_by_code(code)
+        if product:
+            return product.get("restrictions", [])
+        return []
+    
+    def get_all_groups(self):
+        """Получение всех групп ТН ВЭД"""
+        return self.database.get("groups", [])
