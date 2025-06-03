@@ -1,20 +1,21 @@
 from fastapi import FastAPI, Request
-from wed_expert_genspark_integration import GensparktWEDAgent, ProductClassification
 import os
 import telebot
-from ved_router import route_message
-from ved_database import VEDDatabase
 import logging
 import json
+from wed_expert_genspark_integration import GensparktWEDAgent
+from enhanced_ved_system import EnhancedVEDExpertSystem
 
-# Настройка логирования
+# Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('VEDBot')
 
 # FastAPI
-app = FastAPI(title="WED Expert API")
+app = FastAPI(title="WED Expert API Enhanced")
+
+# Инициализация системы
 genspark_agent = GensparktWEDAgent()
-ved_db = VEDDatabase()
+ved_system = EnhancedVEDExpertSystem(genspark_agent)
 
 # Telegram Bot
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -29,22 +30,24 @@ bot = telebot.TeleBot(BOT_TOKEN)
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     """Обработчик команд start и help"""
-    welcome_text = """Добро пожаловать в ВЭД Эксперт! 🚀
+    welcome_text = """Добро пожаловать в ВЭД Эксперт 2.0! 🚀
 
 🎯 **Возможности:**
-• Поиск по кодам ТН ВЭД (10 цифр)
-• Поиск по названию товара
+• Умный поиск по кодам ТН ВЭД (10 цифр)
+• Поиск по названию товара с синонимами
 • Экспертный анализ через ИИ
+• Кэширование для быстрых ответов
 
 📝 **Команды:**
 /start - это сообщение
 /help - справка
-/genspark - ИИ анализ товара
+/stats - статистика системы
 
 💡 **Примеры запросов:**
 • 8471300000
-• ноутбук
+• ноутбук (найдет ноутбуки, лэптопы, laptop)
 • свинина замороженная
+• genspark анализ кофемашины
 
 Просто введите название товара или код!"""
     
@@ -54,62 +57,77 @@ def send_welcome(message):
     except Exception as e:
         logger.error(f"Error sending welcome: {e}")
 
-@bot.message_handler(commands=['genspark'])
-def genspark_classify(message):
-    """Принудительный анализ через Genspark"""
+@bot.message_handler(commands=['stats'])
+def send_stats(message):
+    """Статистика системы"""
     try:
-        bot.reply_to(message, "🧠 Отправьте название товара для углубленного ИИ-анализа\n\nПример: кофемашина DeLonghi 1200W")
+        cache_stats = ved_system.database.cache.stats if hasattr(ved_system.database, 'cache') else {}
+        
+        stats_text = f"""📊 **Статистика ВЭД Эксперт 2.0:**
+
+💾 **Кэш:**
+• Попаданий: {cache_stats.get('hits', 0)}
+• Промахов: {cache_stats.get('misses', 0)}
+
+📚 **База данных:**
+• Товаров в базе: {len(ved_system.database.database.get('codes', []))}
+• Групп товаров: {len(ved_system.database.database.get('groups', []))}
+
+🔍 **Последние запросы кэшированы**"""
+        
+        bot.reply_to(message, stats_text)
+        logger.info(f"Stats sent to user {message.from_user.id}")
     except Exception as e:
-        logger.error(f"Error in genspark command: {e}")
+        logger.error(f"Error sending stats: {e}")
+        bot.reply_to(message, "❌ Ошибка получения статистики")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
-    """Главный обработчик сообщений"""
+    """ГЛАВНЫЙ обработчик - использует EnhancedVEDExpertSystem"""
     try:
         user_input = message.text
         user_id = message.from_user.id
         
-        logger.info(f"Query from user {user_id}: {user_input[:50]}...")
+        logger.info(f"Запрос от пользователя {user_id}: {user_input[:50]}...")
         
-        # Проверяем, нужен ли принудительный Genspark анализ
-        force_genspark = any(keyword.lower() in user_input.lower() 
-                           for keyword in ['genspark', 'ai', 'нейросеть', 'анализ', 'ии'])
-        
-        if force_genspark:
-            # Принудительный Genspark анализ
-            logger.info("Force Genspark analysis requested")
-            
-            product = ProductClassification(
-                name=user_input,
-                material="",
-                function="",
-                processing_level="",
-                origin_country="",
-                value=0.0
-            )
-            
-            genspark_result = genspark_agent.classify_product(product)
-            response = f"🧠 **ИИ-АНАЛИЗ ТОВАРА:**\n\n{genspark_result}"
-            
-        else:
-            # Обычный поиск через базу данных
-            response = route_message(user_input, ved_db)
+        # Используем УМНУЮ систему вместо простой
+        response = ved_system.process_query(user_input)
         
         # Отправляем ответ
         bot.reply_to(message, response, parse_mode="Markdown")
-        logger.info(f"Response sent to user {user_id}")
+        logger.info(f"Ответ отправлен пользователю {user_id}")
         
     except Exception as e:
-        logger.error(f"Error processing message: {e}")
+        logger.error(f"Ошибка при обработке сообщения: {e}")
         try:
-            error_response = f"❌ Произошла ошибка при обработке запроса: {str(e)}"
+            error_response = "❌ Произошла ошибка при обработке запроса. Попробуйте еще раз."
             bot.reply_to(message, error_response)
         except:
-            logger.error("Failed to send error response")
+            logger.error("Не удалось отправить сообщение об ошибке")
 
 @app.get("/")
 def read_root():
-    return {"status": "running", "service": "WED Expert API", "mode": "webhook"}
+    return {
+        "status": "running", 
+        "service": "WED Expert API Enhanced v2.0",
+        "mode": "webhook",
+        "system": "EnhancedVEDExpertSystem"
+    }
+
+@app.get("/stats")
+def api_stats():
+    """API для статистики"""
+    try:
+        cache_stats = ved_system.database.cache.stats if hasattr(ved_system.database, 'cache') else {}
+        
+        return {
+            "cache_stats": cache_stats,
+            "database_codes": len(ved_system.database.database.get('codes', [])),
+            "database_groups": len(ved_system.database.database.get('groups', [])),
+            "system_type": "EnhancedVEDExpertSystem"
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -165,7 +183,7 @@ def webhook_info():
 @app.on_event("startup")
 async def startup():
     """Startup event - устанавливаем webhook"""
-    logger.info("Setting up webhook on startup...")
+    logger.info("Starting Enhanced VED Expert System with webhook...")
     try:
         # Удаляем старый webhook
         bot.remove_webhook()
@@ -175,6 +193,7 @@ async def startup():
         
         if result:
             logger.info(f"✅ Webhook set successfully: {WEBHOOK_URL}")
+            logger.info("✅ Enhanced VED Expert System ready!")
         else:
             logger.error("❌ Failed to set webhook")
             
@@ -183,5 +202,5 @@ async def startup():
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting in standalone mode with webhook...")
+    logger.info("Starting in standalone mode with Enhanced VED System...")
     uvicorn.run(app, host="0.0.0.0", port=8000)
