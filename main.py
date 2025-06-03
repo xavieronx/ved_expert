@@ -1,3 +1,11 @@
+def start_bot():
+    try:
+        # Очистка webhook перед стартом
+        bot.remove_webhook()
+        time.sleep(1)
+        bot.infinity_polling()
+    except Exception as e:
+        print(f"Bot error: {e}")
 from fastapi import FastAPI
 from wed_expert_genspark_integration import GensparktWEDAgent, ProductClassification
 import threading
