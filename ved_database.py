@@ -13,31 +13,83 @@ class VEDDatabase:
         self.data = []
         self.load_database()
     
+    def _format_duties(self, duties: dict) -> str:
+        """Форматирование пошлин"""
+        if not duties:
+            return "Не указана"
+        
+        formatted = []
+        for country, rate in duties.items():
+            if rate and rate != 0:
+                formatted.append(f"{country}: {rate}%")
+        
+        return ", ".join(formatted) if formatted else "Не указана"
+
+    def _format_certification(self, cert: dict) -> str:
+        """Форматирование сертификации"""
+        if not cert:
+            return "Не указана"
+        
+        return cert.get('type', 'Не указана')
+    
     def load_database(self):
         """Загрузка базы данных из JSON файла"""
         try:
             with open(self.json_file, 'r', encoding='utf-8') as f:
                 raw_data = json.load(f)
             
-            # Конвертация если данные в виде строк
-            if raw_data and isinstance(raw_data[0], str):
-                self.data = []
-                for line in raw_data:
-                    if '|' in line:
-                        parts = line.split('|')
-                        if len(parts) >= 4:
-                            self.data.append({
-                                'код': parts[0].strip(),
-                                'название': parts[1].strip(),
-                                'описание': parts[2].strip() if len(parts) > 2 else '',
-                                'группа': parts[3].strip() if len(parts) > 3 else '',
-                                'пошлина': parts[4].strip() if len(parts) > 4 else '',
-                                'сертификация': parts[5].strip() if len(parts) > 5 else ''
-                            })
-            else:
-                self.data = raw_data
+            self.data = []
+            
+            # Проверяем структуру файла
+            if isinstance(raw_data, dict):
+                # Ищем массив товаров в разных ключах
+                products_array = None
+                for key in ['products', 'data', 'items', 'codes']:
+                    if key in raw_data and isinstance(raw_data[key], list):
+                        products_array = raw_data[key]
+                        break
                 
+                # Если не найден массив, проверяем корневой уровень
+                if not products_array:
+                    # Проходим по всем ключам верхнего уровня
+                    for key, value in raw_data.items():
+                        if isinstance(value, list) and value:
+                            # Проверяем есть ли в первом элементе code или код
+                            first_item = value[0]
+                            if isinstance(first_item, dict) and ('code' in first_item or 'код' in first_item):
+                                products_array = value
+                                break
+                
+                if products_array:
+                    # Конвертируем в нашу структуру
+                    for item in products_array:
+                        if isinstance(item, dict):
+                            self.data.append({
+                                'код': item.get('code', item.get('код', '')),
+                                'название': item.get('name', item.get('название', '')),
+                                'описание': item.get('description', item.get('описание', '')),
+                                'группа': item.get('group', item.get('группа', '')),
+                                'пошлина': self._format_duties(item.get('duties', {})),
+                                'сертификация': self._format_certification(item.get('certification', {}))
+                            })
+                            
+            elif isinstance(raw_data, list):
+                # Если это массив товаров
+                for item in raw_data:
+                    if isinstance(item, dict):
+                        self.data.append({
+                            'код': item.get('code', item.get('код', '')),
+                            'название': item.get('name', item.get('название', '')),
+                            'описание': item.get('description', item.get('описание', '')),
+                            'группа': item.get('group', item.get('группа', '')),
+                            'пошлина': self._format_duties(item.get('duties', {})),
+                            'сертификация': self._format_certification(item.get('certification', {}))
+                        })
+                    
             logger.info(f"Загружено {len(self.data)} кодов ТН ВЭД")
+            if self.data:
+                logger.info(f"Первый товар: {self.data[0]['код']} - {self.data[0]['название']}")
+                
         except FileNotFoundError:
             logger.error(f"Файл {self.json_file} не найден")
             self.data = []
