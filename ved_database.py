@@ -21,7 +21,17 @@ class VEDDatabase:
         self.name_index = {}   # Индекс для поиска по названию
         self._cache = {}       # Кэш для поисковых запросов
         self._load_database()
+def get_product_by_code(self, code: str) -> Optional[Dict]:
+    """Совместимость - поиск по коду"""
+    return self.find_by_code(code)
 
+def search_products(self, query: str, limit: int = 10) -> List[Dict]:
+    """Совместимость - поиск товаров"""
+    if query.replace(' ', '').isdigit() and len(query.replace(' ', '')) >= 4:
+        result = self.find_by_code(query)
+        return [result] if result else []
+    return self.search_by_name(query, limit)
+    
     def _load_database(self):
         """Загружает базу данных с индексацией"""
         try:
