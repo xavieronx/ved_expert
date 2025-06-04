@@ -48,7 +48,7 @@ class VEDDatabase:
                     if data and isinstance(data[0], dict):
                         # Проверяем есть ли поля товара
                         first_item = data[0]
-                        if any(key in first_item for key in ['code', 'код', 'name', 'название']):
+                        if any(key in first_item for key in ['code', 'код', 'name', 'название', 'id']):
                             logger.info(f"Найден массив товаров по пути: {path}")
                             return data
                     return None
@@ -69,17 +69,25 @@ class VEDDatabase:
                 for item in products_array:
                     try:
                         if isinstance(item, dict):
+                            # Получаем код из разных возможных полей
+                            code = str(item.get('code', item.get('код', item.get('id', '')))).strip()
+                            name = str(item.get('name', item.get('название', ''))).strip()
+                            description = str(item.get('description', item.get('описание', name))).strip()
+                            group = str(item.get('group', item.get('группа', item.get('id', '')))).strip()
+                            
                             converted_item = {
-                                'код': str(item.get('code', item.get('код', ''))).strip(),
-                                'название': str(item.get('name', item.get('название', ''))).strip(),
-                                'описание': str(item.get('description', item.get('описание', ''))).strip(),
-                                'группа': str(item.get('group', item.get('группа', ''))).strip(),
+                                'код': code,
+                                'название': name,
+                                'описание': description,
+                                'группа': group,
                                 'пошлина': self._format_duties(item.get('duties', {})),
                                 'сертификация': self._format_certification(item.get('certification', {}))
                             }
-                            # Добавляем только если есть код
-                            if converted_item['код']:
+                            
+                            # Добавляем если есть код И название
+                            if converted_item['код'] and converted_item['название']:
                                 self.data.append(converted_item)
+                                logger.info(f"Добавлен товар: {code} - {name}")
                     except Exception as e:
                         logger.error(f"Ошибка обработки товара: {e}")
                         continue
