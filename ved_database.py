@@ -17,7 +17,26 @@ class VEDDatabase:
         """Загрузка базы данных из JSON файла"""
         try:
             with open(self.json_file, 'r', encoding='utf-8') as f:
-                self.data = json.load(f)
+                raw_data = json.load(f)
+            
+            # Конвертация если данные в виде строк
+            if raw_data and isinstance(raw_data[0], str):
+                self.data = []
+                for line in raw_data:
+                    if '|' in line:
+                        parts = line.split('|')
+                        if len(parts) >= 4:
+                            self.data.append({
+                                'код': parts[0].strip(),
+                                'название': parts[1].strip(),
+                                'описание': parts[2].strip() if len(parts) > 2 else '',
+                                'группа': parts[3].strip() if len(parts) > 3 else '',
+                                'пошлина': parts[4].strip() if len(parts) > 4 else '',
+                                'сертификация': parts[5].strip() if len(parts) > 5 else ''
+                            })
+            else:
+                self.data = raw_data
+                
             logger.info(f"Загружено {len(self.data)} кодов ТН ВЭД")
         except FileNotFoundError:
             logger.error(f"Файл {self.json_file} не найден")
@@ -39,7 +58,7 @@ class VEDDatabase:
         
         try:
             for item in self.data:
-                if str(item.get('код', '')).strip() == search_code:
+                if isinstance(item, dict) and str(item.get('код', '')).strip() == search_code:
                     logger.info(f"Найден товар по коду: {search_code}")
                     return item
         except Exception as e:
@@ -58,14 +77,15 @@ class VEDDatabase:
         
         try:
             for item in self.data:
-                item_name = str(item.get('название', '')).lower()
-                item_desc = str(item.get('описание', '')).lower()
-                
-                # Поиск в названии или описании
-                if search_name in item_name or search_name in item_desc:
-                    results.append(item)
-                    if len(results) >= limit:
-                        break
+                if isinstance(item, dict):
+                    item_name = str(item.get('название', '')).lower()
+                    item_desc = str(item.get('описание', '')).lower()
+                    
+                    # Поиск в названии или описании
+                    if search_name in item_name or search_name in item_desc:
+                        results.append(item)
+                        if len(results) >= limit:
+                            break
         except Exception as e:
             logger.error(f"Ошибка поиска по названию {name}: {e}")
         
@@ -89,12 +109,17 @@ class VEDDatabase:
         """Совместимость: поиск товаров"""
         return self.search_by_name(query, limit)
     
+    def search_product(self, query: str, limit: int = 10) -> List[Dict]:
+        """Совместимость: поиск товара (для ved_router)"""
+        return self.search_by_name(query, limit)
+    
     def get_random_products(self, count: int = 5) -> List[Dict]:
         """Получить случайные товары"""
         import random
-        if len(self.data) <= count:
-            return self.data
-        return random.sample(self.data, count)
+        valid_products = [item for item in self.data if isinstance(item, dict)]
+        if len(valid_products) <= count:
+            return valid_products
+        return random.sample(valid_products, count)
     
     def get_products_by_group(self, group: str) -> List[Dict]:
         """Получить товары по группе"""
@@ -106,9 +131,10 @@ class VEDDatabase:
         
         try:
             for item in self.data:
-                item_group = str(item.get('группа', '')).lower()
-                if search_group in item_group:
-                    results.append(item)
+                if isinstance(item, dict):
+                    item_group = str(item.get('группа', '')).lower()
+                    if search_group in item_group:
+                        results.append(item)
         except Exception as e:
             logger.error(f"Ошибка поиска по группе {group}: {e}")
         
@@ -116,7 +142,7 @@ class VEDDatabase:
     
     def format_product_info(self, product: Dict) -> str:
         """Форматирование информации о товаре для отображения"""
-        if not product:
+        if not product or not isinstance(product, dict):
             return "Товар не найден"
         
         try:
@@ -147,11 +173,12 @@ class VEDDatabase:
         
         formatted = f"🔍 Найдено {len(results)} товаров по запросу '{query}':\n\n"
         for i, product in enumerate(results[:10], 1):
-            code = product.get('код', 'Не указан')
-            name = product.get('название', 'Не указано')[:60]
-            if len(product.get('название', '')) > 60:
-                name += "..."
-            formatted += f"{i}. **{code}** - {name}\n"
+            if isinstance(product, dict):
+                code = product.get('код', 'Не указан')
+                name = product.get('название', 'Не указано')[:60]
+                if len(product.get('название', '')) > 60:
+                    name += "..."
+                formatted += f"{i}. **{code}** - {name}\n"
         
         if len(results) > 10:
             formatted += f"\n... и еще {len(results) - 10} товаров"
