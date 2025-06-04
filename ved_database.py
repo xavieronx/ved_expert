@@ -1,100 +1,151 @@
 import json
 import os
 from pathlib import Path
+from typing import Dict, List, Optional
+import logging
+
+logger = logging.getLogger("VED_DATABASE")
 
 class VEDDatabase:
-    """Класс для работы с базой данных ТН ВЭД"""
-    
+    """Оптимизированный класс для работы с большой базой данных ТН ВЭД"""
+
     def __init__(self, data_path=None):
         if data_path is None:
-            # Путь к файлам базы данных в том же каталоге
             data_path = Path(__file__).parent
         else:
             data_path = Path(data_path)
-        
+
         self.data_path = data_path
         self.database = {}
-        self.duties = {}
-        self.certification = {}
-        self.restrictions = {}
-        self.product_certification = {}
-        self.antidumping = {}
-        
+        self.codes_index = {}  # Индекс для быстрого поиска по коду
+        self.name_index = {}   # Индекс для поиска по названию
+        self._cache = {}       # Кэш для поисковых запросов
         self._load_database()
-    
+
     def _load_database(self):
-        """Загружает все компоненты базы данных"""
+        """Загружает базу данных с индексацией"""
         try:
-            # Основная база данных
-            with open(self.data_path / "tnved_database.json", "r", encoding="utf-8") as f:
+            db_file = self.data_path / "tnved_database.json"
+            logger.info(f"Загрузка базы из: {db_file}")
+
+            with open(db_file, "r", encoding="utf-8") as f:
                 self.database = json.load(f)
-            
-            # Сертификация (может не существовать)
-            cert_file = self.data_path / "certification.json"
-            if cert_file.exists():
-                with open(cert_file, "r", encoding="utf-8") as f:
-                    self.certification = json.load(f)
-            
-            print("✅ VEDDatabase loaded successfully")
-            
-        except FileNotFoundError as e:
-            print(f"❌ Database file not found: {e}")
-            self.database = {"codes": [], "groups": []}
+
+            # Создаем индексы для быстрого поиска
+            self._build_indexes()
+
+            codes_count = len(self.database.get("codes", []))
+            logger.info(f"✅ VEDDatabase загружена: {codes_count} кодов")
+
         except Exception as e:
-            print(f"❌ Error loading database: {e}")
+            logger.error(f"❌ Ошибка загрузки базы: {e}")
             self.database = {"codes": [], "groups": []}
-    
-    def search_product(self, query):
-        """Поиск товара по коду или названию"""
-        query = query.strip().lower()
-        
-        if not self.database.get("codes"):
+
+    def _build_indexes(self):
+        """Строит индексы для оптимизации поиска"""
+        codes = self.database.get("codes", [])
+
+        for code_data in codes:
+            code = code_data.get("code", "")
+            name = code_data.get("name", "").lower()
+
+            # Индекс по коду
+            self.codes_index[code] = code_data
+
+            # Индекс по словам в названии
+            words = name.split()
+            for word in words:
+                if len(word) > 2:  # Игнорируем короткие слова
+                    if word not in self.name_index:
+                        self.name_index[word] = []
+                    self.name_index[word].append(code_data)
+
+    def find_by_code(self, code: str) -> Optional[Dict]:
+        """Быстрый поиск по коду ТН ВЭД"""
+        if not code:
             return None
-        
-        # Поиск по коду
-        for product in self.database["codes"]:
-            code = product.get("code", "").lower()
-            name = product.get("name", "").lower()
-            
-            if query in code or query in name:
-                return {"product": product}
-        
+
+        # Очистка кода от лишних символов
+        clean_code = ''.join(filter(str.isdigit, code))
+
+        # Точное совпадение
+        if clean_code in self.codes_index:
+            return self.codes_index[clean_code]
+
+        # Поиск по началу кода (для неполных кодов)
+        for indexed_code, data in self.codes_index.items():
+            if indexed_code.startswith(clean_code):
+                return data
+
         return None
-    
-    def get_product_by_code(self, code):
-        """Получение информации о товаре по коду ТН ВЭД"""
-        if not self.database.get("codes"):
-            return None
-            
-        for product in self.database["codes"]:
-            if product.get("code") == code:
-                return product
+
+    def search_by_name(self, query: str, limit: int = 10) -> List[Dict]:
+        """Поиск по названию товара с ограничением результатов"""
+        if not query or len(query) < 2:
+            return []
+
+        # Проверяем кэш
+        cache_key = f"name_{query.lower()}_{limit}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        query_lower = query.lower()
+        results = []
+        seen_codes = set()
+
+        # Поиск по индексированным словам
+        words = query_lower.split()
+        for word in words:
+            if word in self.name_index:
+                for code_data in self.name_index[word]:
+                    code = code_data.get("code", "")
+                    if code not in seen_codes:
+                        results.append(code_data)
+                        seen_codes.add(code)
+                        if len(results) >= limit:
+                            break
+            if len(results) >= limit:
+                break
+
+        # Если не нашли по индексу, ищем по содержанию
+        if not results:
+            for code_data in self.database.get("codes", []):
+                name = code_data.get("name", "").lower()
+                description = code_data.get("description", "").lower()
+
+                if query_lower in name or query_lower in description:
+                    code = code_data.get("code", "")
+                    if code not in seen_codes:
+                        results.append(code_data)
+                        seen_codes.add(code)
+                        if len(results) >= limit:
+                            break
+
+        # Кэшируем результат
+        self._cache[cache_key] = results[:limit]
+        return results[:limit]
+
+    def get_group_info(self, group_id: str) -> Optional[Dict]:
+        """Получить информацию о группе"""
+        for group in self.database.get("groups", []):
+            if group.get("id") == group_id:
+                return group
         return None
-    
-    def get_duties(self, code, country=None):
-        """Получение информации о пошлинах"""
-        product = self.get_product_by_code(code)
-        if product and "duties" in product:
-            duties = product["duties"]
-            if country:
-                return duties.get(country)
-            return duties
-        return None
-    
-    def get_certification_requirements(self, code):
-        """Получение требований сертификации для товара"""
-        product = self.get_product_by_code(code)
-        if product:
-            return product.get("certification", [])
-        return []
-    
-    def check_restrictions(self, code):
-        """Проверка ограничений для товара"""
-        product = self.get_product_by_code(code)
-        if product:
-            return product.get("restrictions", [])
-        return []
-    
-    def get_all_groups(self):
-        """Получение всех групп ТН ВЭД"""
-        return self.database.get("groups", [])
+
+    def get_statistics(self) -> Dict:
+        """Получить статистику базы данных"""
+        codes = self.database.get("codes", [])
+        groups = self.database.get("groups", [])
+
+        return {
+            "total_codes": len(codes),
+            "total_groups": len(groups),
+            "index_size": len(self.codes_index),
+            "cache_size": len(self._cache),
+            "version": self.database.get("metadata", {}).get("version", "unknown")
+        }
+
+    def clear_cache(self):
+        """Очистить кэш поиска"""
+        self._cache.clear()
+        logger.info("🗑️ Кэш очищен")
