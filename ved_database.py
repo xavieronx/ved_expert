@@ -7,7 +7,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class VEDDatabase:
-    def __init__(self, json_file: str = 'tnved_database_updated.json'):
+    def __init__(self, json_file: str = 'tnved_database.json'):
         """Инициализация базы данных ТН ВЭД"""
         self.json_file = json_file
         self.data = []
