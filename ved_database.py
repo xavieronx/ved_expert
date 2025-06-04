@@ -1,178 +1,175 @@
 import json
-import os
-from pathlib import Path
-from typing import Dict, List, Optional
 import logging
+from typing import List, Dict, Optional, Any
 
-logger = logging.getLogger("VED_DATABASE")
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class VEDDatabase:
-    """Оптимизированный класс для работы с большой базой данных ТН ВЭД"""
-
-    def __init__(self, data_path=None):
-        if data_path is None:
-            data_path = Path(__file__).parent
-        else:
-            data_path = Path(data_path)
-
-        self.data_path = data_path
-        self.database = {}
-        self.codes_index = {}  # Индекс для быстрого поиска по коду
-        self.name_index = {}   # Индекс для поиска по названию
-        self._cache = {}       # Кэш для поисковых запросов
-        self._load_database()
-
-    def _load_database(self):
-        """Загружает базу данных с индексацией"""
+    def __init__(self, json_file: str = 'tnved_database_updated.json'):
+        """Инициализация базы данных ТН ВЭД"""
+        self.json_file = json_file
+        self.data = []
+        self.load_database()
+    
+    def load_database(self):
+        """Загрузка базы данных из JSON файла"""
         try:
-            db_file = self.data_path / "tnved_database.json"
-            logger.info(f"Загрузка базы из: {db_file}")
-            
-            with open(db_file, "r", encoding="utf-8") as f:
-                self.database = json.load(f)
-            
-            # Создаем индексы для быстрого поиска
-            self._build_indexes()
-            
-            codes_count = len(self.database.get("codes", []))
-            logger.info(f"✅ VEDDatabase загружена: {codes_count} кодов")
-            
+            with open(self.json_file, 'r', encoding='utf-8') as f:
+                self.data = json.load(f)
+            logger.info(f"Загружено {len(self.data)} кодов ТН ВЭД")
+        except FileNotFoundError:
+            logger.error(f"Файл {self.json_file} не найден")
+            self.data = []
+        except json.JSONDecodeError as e:
+            logger.error(f"Ошибка парсинга JSON: {e}")
+            self.data = []
         except Exception as e:
-            logger.error(f"❌ Ошибка загрузки базы: {e}")
-            self.database = {"codes": [], "groups": [], "metadata": {}}
-
-    def _build_indexes(self):
-        """Строит индексы для оптимизации поиска"""
-        codes = self.database.get("codes", [])
-        
-        for code_data in codes:
-            code = code_data.get("code", "")
-            name = code_data.get("name", "").lower()
-            
-            # Индекс по коду
-            self.codes_index[code] = code_data
-            
-            # Индекс по словам в названии
-            words = name.split()
-            for word in words:
-                if len(word) > 2:  # Игнорируем короткие слова
-                    if word not in self.name_index:
-                        self.name_index[word] = []
-                    self.name_index[word].append(code_data)
-
+            logger.error(f"Ошибка загрузки базы: {e}")
+            self.data = []
+    
     def find_by_code(self, code: str) -> Optional[Dict]:
-        """Быстрый поиск по коду ТН ВЭД"""
+        """Поиск товара по коду ТН ВЭД (точное совпадение)"""
         if not code:
             return None
-            
-        # Очистка кода от лишних символов
-        clean_code = ''.join(filter(str.isdigit, code))
         
-        # Точное совпадение
-        if clean_code in self.codes_index:
-            return self.codes_index[clean_code]
+        # Очистка кода от пробелов и приведение к строке
+        search_code = str(code).strip()
         
-        # Поиск по началу кода (для неполных кодов)
-        for indexed_code, data in self.codes_index.items():
-            if indexed_code.startswith(clean_code):
-                return data
-                
+        try:
+            for item in self.data:
+                if str(item.get('код', '')).strip() == search_code:
+                    logger.info(f"Найден товар по коду: {search_code}")
+                    return item
+        except Exception as e:
+            logger.error(f"Ошибка поиска по коду {code}: {e}")
+        
+        logger.warning(f"Товар с кодом {search_code} не найден")
         return None
-
-    def search_by_name(self, query: str, limit: int = 10) -> List[Dict]:
-        """Поиск по названию товара с ограничением результатов"""
-        if not query or len(query) < 2:
+    
+    def search_by_name(self, name: str, limit: int = 10) -> List[Dict]:
+        """Поиск товаров по названию (частичное совпадение)"""
+        if not name or len(name.strip()) < 2:
             return []
         
-        # Проверяем кэш
-        cache_key = f"name_{query.lower()}_{limit}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-        
-        query_lower = query.lower()
+        search_name = name.strip().lower()
         results = []
-        seen_codes = set()
         
-        # Поиск по индексированным словам
-        words = query_lower.split()
-        for word in words:
-            if word in self.name_index:
-                for code_data in self.name_index[word]:
-                    code = code_data.get("code", "")
-                    if code not in seen_codes:
-                        results.append(code_data)
-                        seen_codes.add(code)
-                        if len(results) >= limit:
-                            break
-            if len(results) >= limit:
-                break
-        
-        # Если не нашли по индексу, ищем по содержанию
-        if not results:
-            for code_data in self.database.get("codes", []):
-                name = code_data.get("name", "").lower()
-                description = code_data.get("description", "").lower()
+        try:
+            for item in self.data:
+                item_name = str(item.get('название', '')).lower()
+                item_desc = str(item.get('описание', '')).lower()
                 
-                if query_lower in name or query_lower in description:
-                    code = code_data.get("code", "")
-                    if code not in seen_codes:
-                        results.append(code_data)
-                        seen_codes.add(code)
-                        if len(results) >= limit:
-                            break
+                # Поиск в названии или описании
+                if search_name in item_name or search_name in item_desc:
+                    results.append(item)
+                    if len(results) >= limit:
+                        break
+        except Exception as e:
+            logger.error(f"Ошибка поиска по названию {name}: {e}")
         
-        # Кэшируем результат
-        self._cache[cache_key] = results[:limit]
-        return results[:limit]
-
-    def get_product_by_code(self, code: str) -> Optional[Dict]:
-        """Совместимость со старым API - поиск по коду"""
-        return self.find_by_code(code)
-
-    def search_products(self, query: str, limit: int = 10) -> List[Dict]:
-        """Совместимость со старым API - поиск товаров"""
-        # Если запрос выглядит как код ТН ВЭД
-        if query.replace(' ', '').isdigit() and len(query.replace(' ', '')) >= 4:
-            result = self.find_by_code(query)
-            return [result] if result else []
-        
-        # Иначе ищем по названию
-        return self.search_by_name(query, limit)
-
+        logger.info(f"Найдено {len(results)} товаров по запросу: {name}")
+        return results
+    
     def get_all_products(self) -> List[Dict]:
-        """Получить все товары (не рекомендуется для больших баз)"""
-        return self.database.get("codes", [])
-
-    def get_group_info(self, group_id: str) -> Optional[Dict]:
-        """Получить информацию о группе"""
-        for group in self.database.get("groups", []):
-            if group.get("id") == group_id:
-                return group
-        return None
-
-    def get_statistics(self) -> Dict:
-        """Получить статистику базы данных"""
-        codes = self.database.get("codes", [])
-        groups = self.database.get("groups", [])
+        """Получить все товары"""
+        return self.data
+    
+    def get_product_count(self) -> int:
+        """Получить количество товаров в базе"""
+        return len(self.data)
+    
+    # Методы совместимости со старым API
+    def get_product_by_code(self, code: str) -> Optional[Dict]:
+        """Совместимость: получить товар по коду"""
+        return self.find_by_code(code)
+    
+    def search_products(self, query: str, limit: int = 10) -> List[Dict]:
+        """Совместимость: поиск товаров"""
+        return self.search_by_name(query, limit)
+    
+    def get_random_products(self, count: int = 5) -> List[Dict]:
+        """Получить случайные товары"""
+        import random
+        if len(self.data) <= count:
+            return self.data
+        return random.sample(self.data, count)
+    
+    def get_products_by_group(self, group: str) -> List[Dict]:
+        """Получить товары по группе"""
+        if not group:
+            return []
         
-        return {
-            "total_codes": len(codes),
-            "total_groups": len(groups),
-            "index_size": len(self.codes_index),
-            "cache_size": len(self._cache),
-            "version": self.database.get("metadata", {}).get("version", "unknown")
-        }
+        results = []
+        search_group = group.strip().lower()
+        
+        try:
+            for item in self.data:
+                item_group = str(item.get('группа', '')).lower()
+                if search_group in item_group:
+                    results.append(item)
+        except Exception as e:
+            logger.error(f"Ошибка поиска по группе {group}: {e}")
+        
+        return results
+    
+    def format_product_info(self, product: Dict) -> str:
+        """Форматирование информации о товаре для отображения"""
+        if not product:
+            return "Товар не найден"
+        
+        try:
+            code = product.get('код', 'Не указан')
+            name = product.get('название', 'Не указано')
+            description = product.get('описание', 'Не указано')
+            group = product.get('группа', 'Не указана')
+            duty = product.get('пошлина', 'Не указана')
+            cert = product.get('сертификация', 'Не указана')
+            
+            return f"""📦 **Код ТН ВЭД:** {code}
+📝 **Название:** {name}
+📋 **Описание:** {description}
+📂 **Группа:** {group}
+💰 **Пошлина:** {duty}
+✅ **Сертификация:** {cert}"""
+        except Exception as e:
+            logger.error(f"Ошибка форматирования товара: {e}")
+            return "Ошибка форматирования данных"
+    
+    def format_search_results(self, results: List[Dict], query: str = "") -> str:
+        """Форматирование результатов поиска"""
+        if not results:
+            return f"❌ Товары по запросу '{query}' не найдены в базе данных"
+        
+        if len(results) == 1:
+            return self.format_product_info(results[0])
+        
+        formatted = f"🔍 Найдено {len(results)} товаров по запросу '{query}':\n\n"
+        for i, product in enumerate(results[:10], 1):
+            code = product.get('код', 'Не указан')
+            name = product.get('название', 'Не указано')[:60]
+            if len(product.get('название', '')) > 60:
+                name += "..."
+            formatted += f"{i}. **{code}** - {name}\n"
+        
+        if len(results) > 10:
+            formatted += f"\n... и еще {len(results) - 10} товаров"
+        
+        return formatted
 
-    def clear_cache(self):
-        """Очистить кэш поиска"""
-        self._cache.clear()
-        logger.info("🗑️ Кэш очищен")
+# Глобальный экземпляр для использования в других модулях
+ved_db = VEDDatabase()
 
-    def reload_database(self):
-        """Перезагрузить базу данных"""
-        self.database = {}
-        self.codes_index = {}
-        self.name_index = {}
-        self._cache = {}
-        self._load_database()
-        logger.info("🔄 База данных перезагружена")
+# Функции для обратной совместимости
+def get_product_by_code(code: str) -> Optional[Dict]:
+    """Глобальная функция поиска по коду"""
+    return ved_db.find_by_code(code)
+
+def search_by_name(name: str, limit: int = 10) -> List[Dict]:
+    """Глобальная функция поиска по названию"""
+    return ved_db.search_by_name(name, limit)
+
+def get_all_products() -> List[Dict]:
+    """Глобальная функция получения всех товаров"""
+    return ved_db.get_all_products()
